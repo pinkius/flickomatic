@@ -18,6 +18,7 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 
+import javax.annotation.Resource;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.transform.OutputKeys;
@@ -35,6 +36,7 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -44,39 +46,14 @@ import java.util.Map;
  */
 @Service("flickrDownloader")
 public class FlickrDownloader {
+
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
-    private String saveFolder = "c:/temp/flickrtemp";
+    @Value("${flickomatic.home.savedir}")
+    private String saveFolder;
 
-    @Value("${flickomatic.api.key}")
-    private String apiKey;
-
-    @Value("${flickomatic.api.secret}")
-    private String apiSecret;
-
-    @Value("${token}")
-    private String token;
-
-    private void authenticate() {
-        service = new ServiceBuilder().provider(FlickrApi.class).apiKey(apiKey).apiSecret(apiSecret).build();
-        accessToken = new Token(token.split(",")[0], token.split(",")[1]);
-    }
-
-    public String sendRequest(Map<String, String> parameters) {
-        OAuthRequest request = new OAuthRequest(Verb.GET, PROTECTED_RESOURCE_URL);
-        for (String param: parameters.keySet()) {
-            request.addQuerystringParameter(param, parameters.get(param));
-        }
-        service.signRequest(accessToken, request);
-        Response response = request.send();
-
-        return response.getBody();
-    }
-
-    private OAuthService service;
-    private Token accessToken;
-
-    private static final String PROTECTED_RESOURCE_URL = "https://secure.flickr.com/services/rest/";
+    @Resource(name = "comms")
+    private Comms comms;
 
     private void checkDirectory() {
         File saveFolderDirectory = new File(saveFolder);
@@ -163,7 +140,7 @@ public class FlickrDownloader {
                     Map<String, String> params = new HashMap<String, String>();
                     params.put("method", "flickr.photos.comments.getList");
                     params.put("photo_id", photoId);
-                    String comments = sendRequest(params);
+                    String comments = comms.sendGetRequest(params);
                     writeStringToFile(photoId, "comments", comments);
                 }
             }
@@ -174,7 +151,6 @@ public class FlickrDownloader {
 
     public void go() {
         checkDirectory();
-        authenticate();
         //System.out.println(sendRequest(Collections.singletonMap("method", "flickr.photosets.getList")));
 
 
@@ -182,7 +158,7 @@ public class FlickrDownloader {
         Map<String, String> params = new HashMap<String, String>();
         params.put("method", "flickr.photosets.getPhotos");
         params.put("photoset_id", setId);
-        System.out.println(sendRequest(params));
+        System.out.println(comms.sendGetRequest(params));
 
 
 /*
@@ -199,45 +175,6 @@ public class FlickrDownloader {
         processPhotos(photoInfo);
 */
 
-
-
-    }
-
-
-    public static void main(String[] args)
-    {
-        // Replace these with your own api key and secret
-
-/*
-        Scanner in = new Scanner(System.in);
-
-        System.out.println("=== Flickr's OAuth Workflow ===");
-        System.out.println();
-
-        // Obtain the Request Token
-        System.out.println("Fetching the Request Token...");
-        Token requestToken = service.getRequestToken();
-        System.out.println("Got the Request Token!");
-        System.out.println();
-
-        System.out.println("Now go and authorize Scribe here:");
-        String authorizationUrl = service.getAuthorizationUrl(requestToken);
-        System.out.println(authorizationUrl + "&perms=read");
-        System.out.println("And paste the verifier here");
-        System.out.print(">>");
-        Verifier verifier = new Verifier(in.nextLine());
-        System.out.println();
-
-        // Trade the Request Token and Verfier for the Access Token
-        System.out.println("Trading the Request Token for an Access Token...");
-        Token accessToken = service.getAccessToken(requestToken, verifier);
-        System.out.println("Got the Access Token!");
-        System.out.println("(if your curious it looks like this: " + accessToken + " )");
-        System.out.println();
-
-*/
-
-        new FlickrDownloader().go();
 
 
     }
