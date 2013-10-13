@@ -11,6 +11,10 @@ public class Launcher {
     public static void main(String[] args) {
         ApplicationContext applicationContext = new ClassPathXmlApplicationContext("beans.xml");
         FlickrDownloader fd = applicationContext.getBean("flickrDownloader", FlickrDownloader.class);
-        fd.go();
+        if (args.length > 0) {
+            fd.downloadSet(args[0]);
+        } else {
+            fd.downloadAllSets();
+        }
     }
 }
