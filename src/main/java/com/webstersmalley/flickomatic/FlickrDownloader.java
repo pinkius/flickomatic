@@ -43,6 +43,9 @@ public class FlickrDownloader {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
+    private final static String PHOTO_URL_FORMAT = "http://farm%s.staticflickr.com/%s/%s_%s_o.%s";
+
+
     @Value("${flickomatic.home.savedir}")
     private String saveFolder;
 
@@ -145,6 +148,7 @@ public class FlickrDownloader {
      */
     private void processPhoto(String setName, String photoInfo) {
         try {
+
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             DocumentBuilder builder = factory.newDocumentBuilder();
             Document doc = builder.parse(new InputSource(new StringReader(photoInfo)));
@@ -153,14 +157,13 @@ public class FlickrDownloader {
             for (int i = 0; i < nodeList.getLength(); i++) {
                 if (nodeList.item(i) instanceof Element) {
                     Element element = (Element) nodeList.item(i);
-                    String urlFormat = "http://farm%s.staticflickr.com/%s/%s_%s_o.%s";
                     String farmId = element.getAttribute("farm");
                     String serverId = element.getAttribute("server");
                     String photoId = element.getAttribute("id");
                     String originalSecret = element.getAttribute("originalsecret");
                     String format = element.getAttribute("originalformat");
 
-                    String url = String.format(urlFormat, farmId, serverId, photoId, originalSecret, format);
+                    String url = String.format(PHOTO_URL_FORMAT, farmId, serverId, photoId, originalSecret, format);
                     logger.info("Saving image for photo {}", photoId);
                     savePhoto(setName, photoId, format, url);
                     logger.info("Saving metadata for photo {}", photoId);
