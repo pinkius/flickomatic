@@ -33,6 +33,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Created by: Matthew Smalley
@@ -42,6 +45,7 @@ import java.util.Map;
 public class FlickrDownloader {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
+    private int threads = 8;
 
     private final static String PHOTO_URL_FORMAT = "http://farm%s.staticflickr.com/%s/%s_%s_o.%s";
 
@@ -194,14 +198,27 @@ public class FlickrDownloader {
         params.put("method", "flickr.photosets.getPhotos");
         params.put("photoset_id", setId);
         String setContents = comms.sendGetRequest(params);
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+
         for (Map<String, String> photo: XMLUtils.getListOfAttributesFromElements(setContents, "//photo")) {
             params = new HashMap<String, String>();
             params.put("method", "flickr.photos.getInfo");
             params.put("photo_id", photo.get("id"));
             params.put("secret", photo.get("secret"));
             String photoDetails = comms.sendGetRequest(params);
-            processPhoto(setId, photoDetails);
+            executor.execute(new Runnable() {
+                public void run() {
+                    processPhoto(setId, photoDetails);
+                }
+            });
         }
+        executor.shutdown();
+        try {
+            executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            throw new RuntimeException("Error waiting for tasks to complete: " + e.getMessage(), e);
+        }
+
     }
 
     /**
