@@ -131,9 +131,11 @@ public class OAuthAwareComms implements Comms {
         return ("ok".equals(responseAttribute));
     }
 
+
     public String sendRequest(Map<String, String> parameters) {
         logger.debug("Sending request {}", parameters.get("method"));
         OAuthRequest request = new OAuthRequest(Verb.GET, protectedUrl);
+        request.setConnectionKeepAlive(true);
         for (String param: parameters.keySet()) {
             request.addQuerystringParameter(param, parameters.get(param));
         }

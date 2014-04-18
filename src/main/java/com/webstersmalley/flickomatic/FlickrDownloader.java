@@ -1,5 +1,6 @@
 package com.webstersmalley.flickomatic;
 
+import com.flickr4java.flickr.Flickr;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +15,7 @@ import org.xml.sax.InputSource;
 import javax.annotation.Resource;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.OutputKeys;
 import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerException;
@@ -53,11 +55,15 @@ public class FlickrDownloader {
     @Value("${flickomatic.home.savedir}")
     private String saveFolder;
 
+    @Value("${flickomatic.fulldownload}")
+    private boolean fullDownload;
+
     @Resource(name = "comms")
     private Comms comms;
 
     /**
      * Helper method to check (and create if necessary) a folder exists
+     *
      * @param setName the set name (for folder naming purposes)
      */
     private void checkDirectory(String setName) {
@@ -73,17 +79,16 @@ public class FlickrDownloader {
     /**
      * Helper method to write the binary image data to disk
      *
-     * @param setName name of the set (for folder naming purposes)
-     * @param photoId name of the photo (for file naming purposes)
-     * @param format the format (jpeg/png) (for file naming purposes)
+     * @param setName  name of the set (for folder naming purposes)
+     * @param photoId  name of the photo (for file naming purposes)
+     * @param format   the format (jpeg/png) (for file naming purposes)
      * @param photoUrl the url to download
      */
-    private void savePhoto(String setName, String photoId, String format, String photoUrl) {
-        String folder = saveFolder + File.separator + setName;
+    private void savePhoto(String setName, String photoId, String format, String photoUrl, File outputFile) {
         try {
             URL url = new URL(photoUrl);
             InputStream is = url.openStream();
-            OutputStream os = new FileOutputStream(folder + File.separator + photoId + "." + format);
+            OutputStream os = new FileOutputStream(outputFile);
 
             byte[] b = new byte[2048];
             int length;
@@ -104,9 +109,9 @@ public class FlickrDownloader {
     /**
      * Helper method to write a string to file
      *
-     * @param setName name of the set (for folder naming purposes)
-     * @param photoId name of the photo (for file naming purposes)
-     * @param type type (for file naming purposes)
+     * @param setName  name of the set (for folder naming purposes)
+     * @param photoId  name of the photo (for file naming purposes)
+     * @param type     type (for file naming purposes)
      * @param contents the string to write
      */
     private void writeStringToFile(String setName, String photoId, String type, String contents) {
@@ -126,8 +131,8 @@ public class FlickrDownloader {
      *
      * @param setName name of the set (for folder naming purposes)
      * @param photoId name of the photo (for file naming purposes)
-     * @param type type (for file naming purposes)
-     * @param node the Node to write
+     * @param type    type (for file naming purposes)
+     * @param node    the Node to write
      */
     private void writeNodeToFile(String setName, String photoId, String type, Node node) {
         try {
@@ -144,17 +149,24 @@ public class FlickrDownloader {
         }
     }
 
+    private DocumentBuilder builder;
+
+    public FlickrDownloader() {
+        try {
+            builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+        } catch (ParserConfigurationException e) {
+            throw new RuntimeException("Error creating document builder: " + e.getMessage(), e);
+        }
+    }
+
     /**
      * Downloads everything about a given photo (ie the image itself in original format, the metadata and any comments.
      *
-     * @param setName name of the set (for folder naming purposes)
+     * @param setName   name of the set (for folder naming purposes)
      * @param photoInfo flickr photo xml contents
      */
     private void processPhoto(String setName, String photoInfo) {
         try {
-
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            DocumentBuilder builder = factory.newDocumentBuilder();
             Document doc = builder.parse(new InputSource(new StringReader(photoInfo)));
 
             NodeList nodeList = doc.getElementsByTagName("photo");
@@ -168,16 +180,23 @@ public class FlickrDownloader {
                     String format = element.getAttribute("originalformat");
 
                     String url = String.format(PHOTO_URL_FORMAT, farmId, serverId, photoId, originalSecret, format);
-                    logger.info("Saving image for photo {}", photoId);
-                    savePhoto(setName, photoId, format, url);
-                    logger.info("Saving metadata for photo {}", photoId);
-                    writeNodeToFile(setName, photoId, "info", element);
-                    logger.info("Saving comments for photo {}", photoId);
-                    Map<String, String> params = new HashMap<String, String>();
-                    params.put("method", "flickr.photos.comments.getList");
-                    params.put("photo_id", photoId);
-                    String comments = comms.sendGetRequest(params);
-                    writeStringToFile(setName, photoId, "comments", comments);
+
+                    String folder = saveFolder + File.separator + setName;
+                    File outputFile = new File(folder + File.separator + photoId + "." + format);
+                    if (!fullDownload && outputFile.exists() && outputFile.isFile()) {
+                        logger.debug("Skipping download of {} as it already exists", photoId);
+                    } else {
+                        logger.info("Saving image for photo {}", photoId);
+                        savePhoto(setName, photoId, format, url, outputFile);
+                        logger.info("Saving metadata for photo {}", photoId);
+                        writeNodeToFile(setName, photoId, "info", element);
+                        logger.info("Saving comments for photo {}", photoId);
+                        Map<String, String> params = new HashMap<String, String>();
+                        params.put("method", "flickr.photos.comments.getList");
+                        params.put("photo_id", photoId);
+                        String comments = comms.sendGetRequest(params);
+                        writeStringToFile(setName, photoId, "comments", comments);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -200,14 +219,14 @@ public class FlickrDownloader {
         String setContents = comms.sendGetRequest(params);
         ExecutorService executor = Executors.newFixedThreadPool(threads);
 
-        for (Map<String, String> photo: XMLUtils.getListOfAttributesFromElements(setContents, "//photo")) {
-            params = new HashMap<String, String>();
-            params.put("method", "flickr.photos.getInfo");
-            params.put("photo_id", photo.get("id"));
-            params.put("secret", photo.get("secret"));
-            String photoDetails = comms.sendGetRequest(params);
+        for (Map<String, String> photo : XMLUtils.getListOfAttributesFromElements(setContents, "//photo")) {
+            Map<String, String> photoParams = new HashMap<String, String>();
+            photoParams.put("method", "flickr.photos.getInfo");
+            photoParams.put("photo_id", photo.get("id"));
+            photoParams.put("secret", photo.get("secret"));
             executor.execute(new Runnable() {
                 public void run() {
+                    String photoDetails = comms.sendGetRequest(photoParams);
                     processPhoto(setId, photoDetails);
                 }
             });
@@ -231,7 +250,7 @@ public class FlickrDownloader {
         logger.debug("Download list of sets");
         String photosetListXML = comms.sendGetRequest(Collections.singletonMap("method", "flickr.photosets.getList"));
         List<Map<String, String>> setAttributeList = XMLUtils.getListOfAttributesFromElements(photosetListXML, "//photoset");
-        for (Map<String, String> setAttributes: setAttributeList) {
+        for (Map<String, String> setAttributes : setAttributeList) {
             downloadSet(setAttributes.get("id"));
         }
     }
