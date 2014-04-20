@@ -67,7 +67,7 @@ public class FlickrDownloader {
     @Resource(name = "comms")
     private Comms comms;
 
-    private Set<String> photosDownloaded = new HashSet<>();
+    private Set<String> photosProcessed = Collections.synchronizedSet(new HashSet<>());
 
     /**
      * Helper method to check (and create if necessary) a folder exists
@@ -125,7 +125,6 @@ public class FlickrDownloader {
     private void writeStringToFile(File outputFile, String contents) {
         FileOutputStream fos = null;
         try {
-//            fos = new FileOutputStream(saveFolder + File.separator + setName + File.separator + photoId + "." + type + ".xml");
             fos = new FileOutputStream(outputFile);
             IOUtils.write(contents, fos);
             IOUtils.closeQuietly(fos);
@@ -208,31 +207,34 @@ public class FlickrDownloader {
             for (int i = 0; i < nodeList.getLength(); i++) {
                 if (nodeList.item(i) instanceof Element) {
                     Element element = (Element) nodeList.item(i);
-                    String farmId = element.getAttribute("farm");
-                    String serverId = element.getAttribute("server");
                     String photoId = element.getAttribute("id");
-                    String originalSecret = element.getAttribute("originalsecret");
-                    String format = element.getAttribute("originalformat");
-                    String url = String.format(PHOTO_URL_FORMAT, farmId, serverId, photoId, originalSecret, format);
-                    File photoFile = new File(picturesSaveFolder + File.separator + photoId + "." + format);
-                    File infoFile = new File(metadataSaveFolder + File.separator + photoId + ".info.xml");
-                    File commentsFile = new File(metadataSaveFolder + File.separator + photoId + ".comments.xml");
-                    File contextsFile = new File(metadataSaveFolder + File.separator + photoId + ".contexts.xml");
-                    long lastUpdateTime = getLastUpdateTime(element);
+                    if (!photosProcessed.contains(photoId)) {
+                        photosProcessed.add(photoId);
+                        String farmId = element.getAttribute("farm");
+                        String serverId = element.getAttribute("server");
+                        String originalSecret = element.getAttribute("originalsecret");
+                        String format = element.getAttribute("originalformat");
+                        String url = String.format(PHOTO_URL_FORMAT, farmId, serverId, photoId, originalSecret, format);
+                        File photoFile = new File(picturesSaveFolder + File.separator + photoId + "." + format);
+                        File infoFile = new File(metadataSaveFolder + File.separator + photoId + ".info.xml");
+                        File commentsFile = new File(metadataSaveFolder + File.separator + photoId + ".comments.xml");
+                        File contextsFile = new File(metadataSaveFolder + File.separator + photoId + ".contexts.xml");
+                        long lastUpdateTime = getLastUpdateTime(element);
 
-                    if (shouldDownload(lastUpdateTime, photoFile)) {
-                        logger.info("Saving image for photo {}", photoId);
-                        savePhoto(setName, photoId, format, url, photoFile);
-                    }
-                    if (shouldDownload(lastUpdateTime, infoFile)) {
-                        logger.info("Saving metadata for photo {}", photoId);
-                        writeNodeToFile(infoFile, element);
-                    }
-                    if (shouldDownload(lastUpdateTime, commentsFile)) {
-                        savePhotoResponseToFile("flickr.photos.comments.getList", photoId, commentsFile);
-                    }
-                    if (shouldDownload(lastUpdateTime, contextsFile)) {
-                        savePhotoResponseToFile("flickr.photos.getAllContexts", photoId, contextsFile);
+                        if (shouldDownload(lastUpdateTime, photoFile)) {
+                            logger.info("Saving image for photo {}", photoId);
+                            savePhoto(setName, photoId, format, url, photoFile);
+                        }
+                        if (shouldDownload(lastUpdateTime, infoFile)) {
+                            logger.info("Saving metadata for photo {}", photoId);
+                            writeNodeToFile(infoFile, element);
+                        }
+                        if (shouldDownload(lastUpdateTime, commentsFile)) {
+                            savePhotoResponseToFile("flickr.photos.comments.getList", photoId, commentsFile);
+                        }
+                        if (shouldDownload(lastUpdateTime, contextsFile)) {
+                            savePhotoResponseToFile("flickr.photos.getAllContexts", photoId, contextsFile);
+                        }
                     }
                 }
             }
