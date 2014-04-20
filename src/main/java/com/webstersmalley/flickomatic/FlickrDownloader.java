@@ -67,7 +67,7 @@ public class FlickrDownloader {
     @Resource(name = "comms")
     private Comms comms;
 
-    private Set<String> photosProcessed = Collections.synchronizedSet(new HashSet<>());
+    private Set<String> photosProcessed = Collections.synchronizedSet(new HashSet());
 
     /**
      * Helper method to check (and create if necessary) a folder exists
