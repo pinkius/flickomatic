@@ -2,6 +2,7 @@ package com.webstersmalley.flickomatic;
 
 import com.flickr4java.flickr.Flickr;
 import org.apache.commons.io.IOUtils;
+import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,10 +32,13 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.time.LocalDate;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -51,9 +55,11 @@ public class FlickrDownloader {
 
     private final static String PHOTO_URL_FORMAT = "http://farm%s.staticflickr.com/%s/%s_%s_o.%s";
 
+    @Value("${flickomatic.home.savedir.pictures}")
+    private String picturesSaveFolder;
 
-    @Value("${flickomatic.home.savedir}")
-    private String saveFolder;
+    @Value("${flickomatic.home.savedir.metadata}")
+    private String metadataSaveFolder;
 
     @Value("${flickomatic.fulldownload}")
     private boolean fullDownload;
@@ -61,17 +67,21 @@ public class FlickrDownloader {
     @Resource(name = "comms")
     private Comms comms;
 
+    private Set<String> photosDownloaded = new HashSet<>();
+
     /**
      * Helper method to check (and create if necessary) a folder exists
-     *
-     * @param setName the set name (for folder naming purposes)
      */
-    private void checkDirectory(String setName) {
-        File saveFolderDirectory = new File(saveFolder + File.separator + setName);
-        if (!saveFolderDirectory.exists()) {
-            if (!saveFolderDirectory.mkdirs()) {
-                logger.error("Failed to make the directory: {}", saveFolder);
-                throw new RuntimeException("Failed to make the directory: " + saveFolder);
+    private void checkDirectories() {
+        checkDirectory(new File(picturesSaveFolder));
+        checkDirectory(new File(metadataSaveFolder));
+    }
+
+    private void checkDirectory(File directory) {
+        if (!directory.exists()) {
+            if (!directory.mkdirs()) {
+                logger.error("Failed to make the directory: {}", directory.getAbsolutePath());
+                throw new RuntimeException("Failed to make the directory: " + directory.getAbsolutePath());
             }
         }
     }
@@ -109,15 +119,14 @@ public class FlickrDownloader {
     /**
      * Helper method to write a string to file
      *
-     * @param setName  name of the set (for folder naming purposes)
-     * @param photoId  name of the photo (for file naming purposes)
-     * @param type     type (for file naming purposes)
+     * @param outputFile  output file
      * @param contents the string to write
      */
-    private void writeStringToFile(String setName, String photoId, String type, String contents) {
+    private void writeStringToFile(File outputFile, String contents) {
         FileOutputStream fos = null;
         try {
-            fos = new FileOutputStream(saveFolder + File.separator + setName + File.separator + photoId + "." + type + ".xml");
+//            fos = new FileOutputStream(saveFolder + File.separator + setName + File.separator + photoId + "." + type + ".xml");
+            fos = new FileOutputStream(outputFile);
             IOUtils.write(contents, fos);
             IOUtils.closeQuietly(fos);
         } catch (IOException e) {
@@ -129,12 +138,10 @@ public class FlickrDownloader {
     /**
      * Helper method to write a node of XML document to file
      *
-     * @param setName name of the set (for folder naming purposes)
-     * @param photoId name of the photo (for file naming purposes)
-     * @param type    type (for file naming purposes)
+     * @param outputFile  output file
      * @param node    the Node to write
      */
-    private void writeNodeToFile(String setName, String photoId, String type, Node node) {
+    private void writeNodeToFile(File outputFile, Node node) {
         try {
             Transformer transformer = TransformerFactory.newInstance().newTransformer();
             transformer.setOutputProperty(OutputKeys.INDENT, "yes");
@@ -142,7 +149,7 @@ public class FlickrDownloader {
             DOMSource source = new DOMSource(node);
             transformer.transform(source, result);
 
-            writeStringToFile(setName, photoId, type, result.getWriter().toString());
+            writeStringToFile(outputFile, result.getWriter().toString());
         } catch (TransformerException e) {
             logger.error("Error writing file: " + e.getMessage());
             throw new RuntimeException("Error writing file: " + e.getMessage());
@@ -158,6 +165,34 @@ public class FlickrDownloader {
             throw new RuntimeException("Error creating document builder: " + e.getMessage(), e);
         }
     }
+
+    private long getLastUpdateTime(Element element) {
+        long lastUpdateTime = Long.MAX_VALUE;
+        NodeList subElementsList = element.getElementsByTagName("dates");
+        for (int j = 0; j < subElementsList.getLength(); j++) {
+            Element datesElement = (Element) subElementsList.item(j);
+            String dateString = datesElement.getAttribute("lastupdate");
+            lastUpdateTime = ((Long.valueOf(dateString)*1000));
+        }
+        return lastUpdateTime;
+    }
+
+    private boolean shouldDownload(long lastUpdateTime, File outputFile) {
+        if (fullDownload) {
+            return true;
+        }
+        if (!outputFile.exists()) {
+            return true;
+        }
+        logger.debug("Checking date of last download vs lastupdate time for picture: {}", outputFile);
+        boolean shouldDownload = outputFile.lastModified() <= lastUpdateTime;
+        logger.debug("Server time: " + lastUpdateTime);
+        logger.debug("File time: " + outputFile.lastModified());
+        logger.debug("Should download? {}", shouldDownload);
+        return shouldDownload;
+    }
+
+
 
     /**
      * Downloads everything about a given photo (ie the image itself in original format, the metadata and any comments.
@@ -178,30 +213,41 @@ public class FlickrDownloader {
                     String photoId = element.getAttribute("id");
                     String originalSecret = element.getAttribute("originalsecret");
                     String format = element.getAttribute("originalformat");
-
                     String url = String.format(PHOTO_URL_FORMAT, farmId, serverId, photoId, originalSecret, format);
+                    File photoFile = new File(picturesSaveFolder + File.separator + photoId + "." + format);
+                    File infoFile = new File(metadataSaveFolder + File.separator + photoId + ".info.xml");
+                    File commentsFile = new File(metadataSaveFolder + File.separator + photoId + ".comments.xml");
+                    File contextsFile = new File(metadataSaveFolder + File.separator + photoId + ".contexts.xml");
+                    long lastUpdateTime = getLastUpdateTime(element);
 
-                    String folder = saveFolder + File.separator + setName;
-                    File outputFile = new File(folder + File.separator + photoId + "." + format);
-                    if (!fullDownload && outputFile.exists() && outputFile.isFile()) {
-                        logger.debug("Skipping download of {} as it already exists", photoId);
-                    } else {
+                    if (shouldDownload(lastUpdateTime, photoFile)) {
                         logger.info("Saving image for photo {}", photoId);
-                        savePhoto(setName, photoId, format, url, outputFile);
+                        savePhoto(setName, photoId, format, url, photoFile);
+                    }
+                    if (shouldDownload(lastUpdateTime, infoFile)) {
                         logger.info("Saving metadata for photo {}", photoId);
-                        writeNodeToFile(setName, photoId, "info", element);
-                        logger.info("Saving comments for photo {}", photoId);
-                        Map<String, String> params = new HashMap<String, String>();
-                        params.put("method", "flickr.photos.comments.getList");
-                        params.put("photo_id", photoId);
-                        String comments = comms.sendGetRequest(params);
-                        writeStringToFile(setName, photoId, "comments", comments);
+                        writeNodeToFile(infoFile, element);
+                    }
+                    if (shouldDownload(lastUpdateTime, commentsFile)) {
+                        savePhotoResponseToFile("flickr.photos.comments.getList", photoId, commentsFile);
+                    }
+                    if (shouldDownload(lastUpdateTime, contextsFile)) {
+                        savePhotoResponseToFile("flickr.photos.getAllContexts", photoId, contextsFile);
                     }
                 }
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+      
+    private void savePhotoResponseToFile(String method, String photoId, File outputFile) {
+        logger.info("Writing: {}", outputFile);
+        Map<String, String> params = new HashMap<String, String>();
+        params.put("method", method);
+        params.put("photo_id", photoId);
+        String comments = comms.sendGetRequest(params);
+        writeStringToFile(outputFile, comments);
     }
 
     /**
@@ -211,12 +257,20 @@ public class FlickrDownloader {
      * @param setId the id of the set to download
      */
     public void downloadSet(String setId) {
-        logger.info("Downloading set: {}", setId);
-        checkDirectory(setId);
-        Map<String, String> params = new HashMap<String, String>();
-        params.put("method", "flickr.photosets.getPhotos");
-        params.put("photoset_id", setId);
-        String setContents = comms.sendGetRequest(params);
+        checkDirectories();
+        String setContents;
+        if (setId == null) {
+            logger.info("Downloading photos not in sets");
+            Map<String, String> params = new HashMap<String, String>();
+            params.put("method", "flickr.photos.getNotInSet");
+            setContents = comms.sendGetRequest(params);
+        } else {
+            logger.info("Downloading set: {}", setId);
+            Map<String, String> params = new HashMap<String, String>();
+            params.put("method", "flickr.photosets.getPhotos");
+            params.put("photoset_id", setId);
+            setContents = comms.sendGetRequest(params);
+        }
         ExecutorService executor = Executors.newFixedThreadPool(threads);
 
         for (Map<String, String> photo : XMLUtils.getListOfAttributesFromElements(setContents, "//photo")) {
@@ -253,5 +307,6 @@ public class FlickrDownloader {
         for (Map<String, String> setAttributes : setAttributeList) {
             downloadSet(setAttributes.get("id"));
         }
+        downloadSet(null);
     }
 }
